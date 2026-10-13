@@ -1,110 +1,126 @@
-# Sydney TMD V2
+# Sydney TMD V2 implementation plan
 
-## Plan
+## Purpose and status
 
-Create a new project (`sydney-tmd-v2`) based on `ml/sydney-tmd-v1`
-The project should:
-- Refer most of its project structure from `sydney-tmd-v1`
-- Run on docker
-- Only use Sydney data
-- The project should have a script which accepts a `.json` file and run the experiment.
-- Each experiment run should record a reproducible snapshot of the dataset when running the experiment.
-- Each run should be saved to mlflow and viewable on docker MLflow. The run name should contain the experiment execution datetime and randomly generated 6 hex characters.
-- Each run produce a set of `.csv` files and a line
+Build a Sydney-only transport-mode study from the structure and sensor semantics
+of `../sydney-tmd-v1`. V2 will run JSON-defined experiments in Docker Compose,
+compare configurable windows and model families, and show live progress and
+results in a Docker-hosted MLflow server. This document specifies the intended
+implementation; the V2 pipeline and Compose services do not exist yet. See
+[README.md](README.md) for the proposed operator workflow.
 
-## Configuration File Description
-- `feature_names`: e.g. ["accelerometer#mean", "accelerometer#standard_deviation", "gyroscope#standard_deviation"]
-- `windows_seconds`: e.g. [100, 120, 140]
-    - The maximum window length should be the minimum session duration in the preprocessing step.
-- `seeds`: e.g. [42, 43, 44]
-- `individual_transport_training_ratios`: e.g. { "bus": 1.0, "car": 1.0, "train": 1.0 }
-- `labels`: e.g. {"bus": 0, "car": 1, "train": 2}
-- `evaluation_strategy` e.g. "participant_lopo", "manual_participant_selection", "train_test_split"
-- `selection_metric`: e.g. "macro_f1", "balanced_accuracy"
-- `bootstrap_iterations`: null, or a number e.g. 5000
-- `optuna_trials`: e.g. 100,
-- `model_families`: e.g. ["xgboost"],
-- `train_test_split_ratio`: e.g. null, or 0.8
-- `cv_fold_count`: e.g. null, or a number 5
-- `minimum_window_count_per_participant`: e.g. 10
-    - If a participant contains total windows less than `minimum_window_count_per_participant`, the participant should be excluded from the experiment.
+Each execution receives an immutable run identity. The MLflow parent run name
+uses the UTC execution start time and six randomly generated lowercase hex
+characters, for example `20261013T043015Z-a1b2c3`. Child runs represent tuning
+studies and evaluated results; Optuna trials are recorded within study runs,
+not as individual MLflow runs. Log progress while the experiment runs. Save
+metric CSVs, predictions, trial histories, a machine-readable study summary,
+and a macro-F1-versus-window line chart locally and as MLflow artifacts.
 
-### `evaluation_strategy` Description
+## Experiment JSON
 
-#### `participant_lopo`
-Leave one participant out. For example, if there are total 7 participants, leave 1 out, train on other 6 and evaluate on the excluded participant, repeating 7 times and average the metric.
+One JSON file defines one experiment. The intended baseline uses the V1 study
+windows, seeds, features, and XGBoost model. Random forest is an additional V2
+option. The defaults below apply when a field is omitted; strategy-specific
+fields are required only when that strategy uses them.
 
-#### `manual_participant_group`
-User inputs participants manually, for example:
-{
-    "train": ["participant_001", "participant_003", ...]
-    "test": ["participant_004", "participant_005", ...]
-}
+| Field | Default | Meaning |
+|---|---|---|
+| `feature_names` | All V1 registered features | Nonempty list of registered feature extractor names, such as `accelerometer#mean` and `gyroscope#standard_deviation`. Unknown names fail validation; adding an extractor requires code. |
+| `windows_seconds` | `[100, 120, 140]` | Nonempty list of distinct positive window lengths. The longest configured window is the minimum session duration before quality checks. |
+| `seeds` | `[42, 43, 44]` | Nonempty list of distinct integer seeds for repeatable splits, sampling, and model training. |
+| `individual_transport_training_ratios` | `1.0` for every configured class | Per-class fractions in `(0, 1]` of whole **training sessions** to retain for each seed. Validation and test sessions are never sampled. |
+| `labels` | `{"bus": 0, "car": 1, "train": 2}` | Mapping from selected Sydney `vehicle_type` values to distinct, contiguous integer codes starting at zero. Unlisted types are excluded. |
+| `evaluation_strategy` | `"participant_lopo"` | One of `participant_lopo`, `manual_participant_group`, or `train_test_split`. |
+| `selection_metric` | `"macro_f1"` | `macro_f1` or `balanced_accuracy`; used for both Optuna trials and window selection. |
+| `bootstrap_iterations` | `5000` | Positive draw count for 95% percentile intervals; `null` disables intervals. |
+| `optuna_trials` | `100` | Positive number of completed trials per tuning study. |
+| `model_families` | `["xgboost"]` | Nonempty selection from `xgboost` and `random_forest`. Trials choose among the requested families. |
+| `cv_fold_count` | `3` | Number of inner folds for every strategy; integer at least 2 and no greater than the available training groups. |
+| `minimum_window_count_per_participant` | `10` | Exclude participants below this quality-valid window count at **any** configured size. |
+| `manual_participant_group` | Omitted | Required only for the matching strategy: `{"train": ["participant_001"], "test": ["participant_004"]}` with nonempty, disjoint participant ID lists. |
+| `train_test_split_ratio` | Omitted | Required only for `train_test_split`: fraction in `(0, 1)` targeting training windows per participant; for example, `0.8`. |
 
-#### `train_test_split`
-If this strategy is selected, `train_test_split_ratio` and `cv_fold_count` is required.
+For the baseline experiment, the JSON can contain `{}` and use these defaults.
+An explicit manual split, for example, sets `evaluation_strategy` to
+`manual_participant_group` and supplies `manual_participant_group.train` and
+`manual_participant_group.test`. Validate unknown fields, duplicate values,
+unknown participant IDs, missing classes in a training partition, and infeasible
+inner folds before expensive tuning. Record the resolved config in the run.
 
-The session data should be sliced into the given window length and the features should be extracted first, with the participant and transport mode metadata label to each extracted data.
+### Evaluation strategies and data separation
 
-Split the extracted features into training and testing set. `train_test_split_ratio` should be the training set ratio and `1 - train_test_split_ratio` should be the testing set ratio.
+Extract and label complete windows first, preserving participant, session, and
+transport metadata. Keep every window from a session together in all training,
+validation, and test assignments. This matters because windows overlap.
 
-The split should aim to maintain the equal ratio for the window for each participant. For example, If participant A contains 5 windows after feature extraction, and `train_test_split_ratio` = 0.8, 4 (= 5 * 0.8) windows should go into the training set and 1 (= 5 * 0.2) window should go into the testing set. If the `train_test_split_ratio` * `total_window_count` is not an integer, use floor rounding.
+- `participant_lopo`: Hold out each eligible participant in turn. Tune using
+  participant-disjoint inner folds on the other participants, refit on the
+  outer training participants, and evaluate the held-out participant. Report
+  each held-out result and the aggregate across participants and seeds.
+- `manual_participant_group`: Use exactly the listed train and test
+  participants; unlisted participants do not enter this evaluation. Tune with
+  participant-disjoint inner folds in the train group, then evaluate the fixed
+  test group once per seed and window.
+- `train_test_split`: Make a seeded, session-disjoint train/test assignment
+  that approximates `train_test_split_ratio` by **window count for each
+  participant**, considering every configured window size. Whole sessions
+  make an exact target such as four of five windows impossible in some cases.
+  A participant with too few sessions may appear on only one side. Use
+  session-disjoint inner folds in the training pool. Require nonempty train
+  and test sets and all configured classes in every training partition;
+  report a clear diagnostic if a viable assignment or fold is impossible.
 
-`cv_fold_count` is a positive integer with default value 1.
-It splits the training set into `cv_fold_count`-folds and uses cross validation to train inner folds and select the winning configuration.
+Freeze split identities and sampled training-session IDs per seed so that
+window-size comparisons use the same underlying sessions. For a requested
+transport ratio, select whole sessions from the current training partition
+using the given seed, retain at least one session per configured class, and
+keep all windows of selected sessions. Fit imputation and class-balanced sample
+weights only on the selected training partition. Never use held-out data for
+selection, imputation, or training weights.
 
-### `bootstrap_iterations`
-If `bootstrap_iterations` is not null, create `bootstrap_iterations` amount of sets with all participants and all seed values provided.
-For example, if 3 seed values are provided and there are total 7 participants,
-```
-sample 3 training seeds with replacement
-sample 7 participants with replacement
-sample sessions within each selected participant
-recompute pooled macro F1 for every sampled seed
-average the 3 sampled-seed scores
-```
+## Data snapshot and features
 
-### `individual_transport_training_ratios`
-Each fraction value denotes the actual ratio of training data to use from the training set. Therefore, 1.0 should use the full training set. 0.5 should use half of the training set to train models. Picking the data from the training set should use the given seed for reproducibility. Default value is 1.0 for each transport mode.
+Read locally downloaded Sydney session JSON or compressed JSON files; fetching
+or syncing data is a separate prerequisite. Require an explicit
+`collection_country_code == "AU"`. Exclude records with missing or non-AU
+country labels, including legacy records admitted by older studies. Apply the
+configured `labels` mapping to `vehicle_type` and exclude unlisted types.
 
+At preparation time, copy every eligible source session and its metadata
+sidecars into a per-run, content-addressed input snapshot. Save file hashes,
+original paths, session and participant identities, exclusion reasons, class
+counts, and participant/class coverage in a manifest. Record the resolved JSON,
+code/dependency versions, and split and sampling decisions so the experiment
+can be reproduced even if the original download is removed. Derive participant
+counts from this run's cohort; do not assume V1's seven participants.
 
-## Data
+Retain a session only if it produces at least one quality-valid window at
+**every configured window size**. Window counts can differ by size, but the
+session cohort remains common. Then apply
+`minimum_window_count_per_participant` at every size and record participant
+exclusions. Use complete, half-open windows with 50% overlap. For the baseline
+windows, the steps are 50, 60, and 70 seconds respectively.
 
-Freeze a new input manifest from the locally downloaded Sydney sessions available
-when preparation runs. The input directory contains session JSON or compressed
-JSON files; downloading or synchronizing data is a separate prerequisite.
-
-- Require an explicit `collection_country_code == "AU"`. Exclude missing country
-  labels and non-AU sessions, including legacy records that the reference study
-  admitted without a country label.
-- Use the same session cohort for all window sizes: retain a session only if it
-  produces at least one quality-valid window at each of 100, 120, and 140 seconds.
-  Window counts may differ across sizes even though session membership is fixed.
-- Record input fingerprints, session and participant identities, exclusion
-  reasons, class counts, and participant/class coverage. Derive participant counts
-  from this cohort; do not inherit the previous snapshot or its seven-participant
-  assumption.
-
-## Features
-
-Use complete windows within each session, with 50% overlap:
-For example, with window lengths [100, 120, 140],:
-
-| Window length | Step |
-|---|---|
-| 100 seconds | 50 seconds |
-| 120 seconds | 60 seconds |
-| 140 seconds | 70 seconds |
-
-
-Preserve the reference pipeline's sensor-magnitude calculations and quality
+Preserve the V1 sensor-magnitude calculations, feature ordering and quality
 checks. Minimum sampling rates are 30 Hz for accelerometer, 4 Hz for gyroscope,
-and 2 Hz for magnetometer; the maximum permitted sample gap is 500 ms.
+and 2 Hz for magnetometer; the maximum permitted sample gap is 500 ms. The
+baseline registered features are the V1 magnitude statistics: mean, population
+standard deviation, range, and minimum for accelerometer and gyroscope; and
+standard deviation, range, and minimum for magnetometer. A new feature name
+requires a registered implementation, not an expression in JSON.
 
-### Trial budget and search space
+## Tuning and model selection
 
-Use sequential trials, CPU XGBoost, and configurable model threads. Disable
-pruning and early stopping. Preserve the existing nine-parameter search space:
+Run sequential Optuna trials on CPU with configurable model threads. Disable
+pruning and early stopping. A trial chooses a family from `model_families` and
+its family-specific parameters. Use the V1 XGBoost histogram-tree multiclass
+classifier and median-imputation pipeline with missing-value indicators.
+Random forest uses the same imputation and indicators. Compute class-balanced
+sample weights only from the current training partition. Apply no duration
+balancing.
+
+Retain the V1 nine-parameter XGBoost search space:
 
 | Parameter | XGBoost name | Search range |
 |---|---|---|
@@ -118,21 +134,38 @@ pruning and early stopping. Preserve the existing nine-parameter search space:
 | L1 regularization | `reg_alpha` | 0–2 |
 | L2 regularization | `reg_lambda` | 0.5–10 |
 
-Float ranges are linear unless explicitly marked logarithmic. Preserve the
-reference XGBoost histogram-tree multiclass classifier and median-imputation
-pipeline, including missing-value indicators. Fit imputation and compute
-class-balanced sample weights using only the current training partition. Apply
-no duration balancing.
+For random forest, adapt the existing `../all-tmd-v2/all_tmd/models.py`
+search: `n_estimators` 200–800 in steps of 100; `max_depth` from
+`[null, 8, 12, 16, 24]`; `min_samples_split` from `[2, 4, 8, 16]`;
+`min_samples_leaf` from `[1, 2, 4, 8]`; and `max_features` from
+`["sqrt", "log2", 0.5, 0.8]`. XGBoost float ranges are linear unless marked
+logarithmic. Use the same resolved labels and training partition for either
+family.
 
-Each trial maximizes macro F1 calculated from pooled inner out-of-fold
-predictions, using the `labels` and zero for undefined class
-scores. Do not average the three fold-level F1 values as the tuning objective.
+For each trial, pool inner out-of-fold predictions before calculating the
+configured `selection_metric`; do not average fold-level scores. Macro F1
+uses all configured labels, with zero for undefined class scores. Choose the
+winning trial and window from inner validation only, then refit before held-out
+evaluation. Report both selection metrics even when only one drives selection.
 
-## Evaluation
+## Evaluation, tracking, and operation
 
-Include balanced accuracy, per-class scores, and confusion matrices.
+Report macro F1, balanced accuracy, per-class precision/recall/F1/support,
+and confusion matrices for each fixed window and applicable selected-window
+result. Save supporting CSV tables, held-out predictions, trial histories,
+the study summary, and a macro-F1-versus-window line chart. If
+`bootstrap_iterations` is enabled, draw seeds with replacement, participants
+within sampled seeds, and sessions within sampled participants while retaining
+each sampled session's windows. Recompute pooled metrics and generate 95%
+percentile intervals for **every evaluated fixed window**, showing them on
+the chart. Keep selected-window results separate. If bootstrap is `null`,
+omit intervals and bands.
 
-If applicable, generate 95% percentile confidence intervals fromhierarchical bootstrap draws.
-
-Produce a macro-F1-versus-window chart, and if applicable, with confidence intervals. Save supporting metric tables, predictions, trial
-histories, and a machine-readable study summary.
+Docker Compose will provide a one-shot experiment service and a persistent
+MLflow tracking server. Mount session inputs read-only and keep the run
+snapshot, reports, and MLflow store in persistent writable volumes. The
+experiment entry point accepts a JSON path, validates and freezes its resolved
+settings, prepares the snapshot, evaluates the strategies, writes local
+outputs, and streams progress to the MLflow parent and child runs. Publish
+the output artifacts to MLflow as stages finish. The README will gain exact
+commands once the services and CLI exist.
