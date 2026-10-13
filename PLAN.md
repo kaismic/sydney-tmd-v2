@@ -42,7 +42,7 @@ User inputs participants manually, for example:
 }
 
 #### `train_test_split`
-If this strategy is selected, "train_test_split_ratio" and "cv_fold_count" is required.
+If this strategy is selected, `train_test_split_ratio` and `cv_fold_count` is required.
 
 The session data should be sliced into the given window length and the features should be extracted first, with the participant and transport mode metadata label to each extracted data.
 
@@ -50,6 +50,8 @@ Split the extracted features into training and testing set. `train_test_split_ra
 
 The split should aim to maintain the equal ratio for the window for each participant. For example, If participant A contains 5 windows after feature extraction, and `train_test_split_ratio` = 0.8, 4 (= 5 * 0.8) windows should go into the training set and 1 (= 5 * 0.2) window should go into the testing set. If the `train_test_split_ratio` * `total_window_count` is not an integer, use floor rounding.
 
+`cv_fold_count` is a positive integer with default value 1.
+It splits the training set into `cv_fold_count`-folds and uses cross validation to train inner folds and select the winning configuration.
 
 ### `bootstrap_iterations`
 If `bootstrap_iterations` is not null, create `bootstrap_iterations` amount of sets with all participants and all seed values provided.
@@ -83,18 +85,10 @@ JSON files; downloading or synchronizing data is a separate prerequisite.
   from this cohort; do not inherit the previous snapshot or its seven-participant
   assumption.
 
-
-
-
-
-
-TODO
-
-
 ## Features
 
-
 Use complete windows within each session, with 50% overlap:
+For example, with window lengths [100, 120, 140],:
 
 | Window length | Step |
 |---|---|
@@ -102,3 +96,43 @@ Use complete windows within each session, with 50% overlap:
 | 120 seconds | 60 seconds |
 | 140 seconds | 70 seconds |
 
+
+Preserve the reference pipeline's sensor-magnitude calculations and quality
+checks. Minimum sampling rates are 30 Hz for accelerometer, 4 Hz for gyroscope,
+and 2 Hz for magnetometer; the maximum permitted sample gap is 500 ms.
+
+### Trial budget and search space
+
+Use sequential trials, CPU XGBoost, and configurable model threads. Disable
+pruning and early stopping. Preserve the existing nine-parameter search space:
+
+| Parameter | XGBoost name | Search range |
+|---|---|---|
+| Trees | `n_estimators` | Integers 200–1,200, step 100 |
+| Learning rate | `learning_rate` | 0.02–0.2, logarithmic |
+| Maximum depth | `max_depth` | Integers 3–8 |
+| Minimum child weight | `min_child_weight` | 1–10 |
+| Row subsampling | `subsample` | 0.6–1.0 |
+| Column subsampling | `colsample_bytree` | 0.5–1.0 |
+| Gamma | `gamma` | 0–5 |
+| L1 regularization | `reg_alpha` | 0–2 |
+| L2 regularization | `reg_lambda` | 0.5–10 |
+
+Float ranges are linear unless explicitly marked logarithmic. Preserve the
+reference XGBoost histogram-tree multiclass classifier and median-imputation
+pipeline, including missing-value indicators. Fit imputation and compute
+class-balanced sample weights using only the current training partition. Apply
+no duration balancing.
+
+Each trial maximizes macro F1 calculated from pooled inner out-of-fold
+predictions, using the `labels` and zero for undefined class
+scores. Do not average the three fold-level F1 values as the tuning objective.
+
+## Evaluation
+
+Include balanced accuracy, per-class scores, and confusion matrices.
+
+If applicable, generate 95% percentile confidence intervals fromhierarchical bootstrap draws.
+
+Produce a macro-F1-versus-window chart, and if applicable, with confidence intervals. Save supporting metric tables, predictions, trial
+histories, and a machine-readable study summary.
