@@ -10,8 +10,8 @@ implementation; the V2 pipeline and Compose services do not exist yet. See
 [README.md](README.md) for the proposed operator workflow.
 
 Each execution receives an immutable run identity. The MLflow parent run name
-uses the UTC execution start time and six randomly generated lowercase hex
-characters, for example `20261013T043015Z-a1b2c3`. Child runs represent tuning
+uses the UTC execution start time and eight randomly generated lowercase hex
+characters, for example `20261013T043015Z-a1b2c3d4`. Child runs represent tuning
 studies and evaluated results; Optuna trials are recorded within study runs,
 not as individual MLflow runs. Log progress while the experiment runs. Save
 metric CSVs, predictions, trial histories, a machine-readable study summary,
@@ -31,7 +31,7 @@ fields are required only when that strategy uses them.
 | `seeds` | `[42, 43, 44]` | Nonempty list of distinct integer seeds for repeatable splits, sampling, and model training. |
 | `individual_transport_training_ratios` | `1.0` for every configured class | Per-class fractions in `(0, 1]` of whole **training sessions** to retain for each seed. Validation and test sessions are never sampled. |
 | `labels` | `{"bus": 0, "car": 1, "train": 2}` | Mapping from selected Sydney `vehicle_type` values to distinct, contiguous integer codes starting at zero. Unlisted types are excluded. |
-| `evaluation_strategy` | `"participant_lopo"` | One of `participant_lopo`, `manual_participant_group`, or `train_test_split`. |
+| `evaluation_strategy` | `"participant_lopo"` | One of `participant_lopo`, `manual_participant_group`, or `session_train_test_split`. |
 | `selection_metric` | `"macro_f1"` | `macro_f1` or `balanced_accuracy`; used for both Optuna trials and window selection. |
 | `bootstrap_iterations` | `5000` | Positive draw count for 95% percentile intervals; `null` disables intervals. |
 | `optuna_trials` | `100` | Positive number of completed trials per tuning study. |
@@ -39,7 +39,7 @@ fields are required only when that strategy uses them.
 | `cv_fold_count` | `3` | Number of inner folds for every strategy; integer at least 2 and no greater than the available training groups. |
 | `minimum_window_count_per_participant` | `10` | Exclude participants below this quality-valid window count at **any** configured size. |
 | `manual_participant_group` | Omitted | Required only for the matching strategy: `{"train": ["participant_001"], "test": ["participant_004"]}` with nonempty, disjoint participant ID lists. |
-| `train_test_split_ratio` | Omitted | Required only for `train_test_split`: fraction in `(0, 1)` targeting training windows per participant; for example, `0.8`. |
+| `session_train_test_split_ratio` | Omitted | Required only for `session_train_test_split`: fraction in `(0, 1)` targeting training windows per participant; for example, `0.8`. |
 
 For the baseline experiment, the JSON can contain `{}` and use these defaults.
 An explicit manual split, for example, sets `evaluation_strategy` to
@@ -62,8 +62,8 @@ validation, and test assignments. This matters because windows overlap.
   participants; unlisted participants do not enter this evaluation. Tune with
   participant-disjoint inner folds in the train group, then evaluate the fixed
   test group once per seed and window.
-- `train_test_split`: Make a seeded, session-disjoint train/test assignment
-  that approximates `train_test_split_ratio` by **window count for each
+- `session_train_test_split`: Make a seeded, session-disjoint train/test assignment
+  that approximates `session_train_test_split_ratio` by **window count for each
   participant**, considering every configured window size. Whole sessions
   make an exact target such as four of five windows impossible in some cases.
   A participant with too few sessions may appear on only one side. Use
