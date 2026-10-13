@@ -1,13 +1,16 @@
 import json
 import shutil
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
+from matplotlib.figure import Figure
 
 from sydney_tmd_v2.cli import main
 from sydney_tmd_v2.config import validate_config
 from sydney_tmd_v2.core import read_json
 from sydney_tmd_v2.data import make_splits
+from sydney_tmd_v2.reporting import confusion_chart, confusion_chart_names, report
 from sydney_tmd_v2.training import model
 
 
@@ -47,6 +50,35 @@ def test_both_model_families_accept_binary_labels():
         estimator = model(params, 7, 1, 2)
         estimator.fit(np.array([[0.], [1.], [0.1], [1.1]]), [0, 1, 0, 1])
         assert estimator.predict([[0.], [1.]]).shape == (2,)
+
+
+def test_confusion_charts_show_each_seed_dynamic_labels_and_zero_support(tmp_path, monkeypatch):
+    matrices = {43: np.array([[0, 2], [3, 1]]),
+                42: np.array([[1, 1], [0, 0]])}
+    labels = {"ferry": 1, "tram": 0}
+    captured = []
+    savefig = Figure.savefig
+
+    def capture(self, path, *args, **kwargs):
+        captured.append([{
+            "title": ax.get_title(),
+            "labels": [tick.get_text() for tick in ax.get_xticklabels()],
+            "values": np.asarray(ax.images[0].get_array()).copy(),
+            "annotations": [text.get_text() for text in ax.texts],
+        } for ax in self.axes])
+        return savefig(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", capture)
+    for normalized, filename in zip((True, False), confusion_chart_names("4")):
+        with np.errstate(divide="raise", invalid="raise"):
+            confusion_chart(matrices, labels, "4", tmp_path / filename, normalized)
+        assert (tmp_path / filename).stat().st_size > 0
+    assert [panel["title"] for panel in captured[0]] == ["Seed 42", "Seed 43"]
+    assert all(panel["labels"] == ["tram", "ferry"] for panel in captured[0])
+    np.testing.assert_array_equal(captured[0][0]["values"], [[0.5, 0.5], [0, 0]])
+    assert captured[0][0]["annotations"] == ["50.0%", "50.0%", "0.0%", "0.0%"]
+    np.testing.assert_array_equal(captured[1][1]["values"], matrices[43])
+    assert captured[1][1]["annotations"] == ["0", "2", "3", "1"]
 
 
 def _session(path, person, mode, session_id):
@@ -93,10 +125,41 @@ def test_small_end_to_end_experiment_with_snapshot_and_report(tmp_path):
     assert all((run / file["snapshot"]).exists() for item in snapshot for file in item["files"])
     assert {x["exclusion"] for x in read_json(run / "cohort.json")["exclusions"]} == {
         "non_AU", "unsupported_class"}
-    report = read_json(run / "reports" / "study-summary.json")
-    assert set(report["results"]) == {"4", "6", "selected"}
-    assert report["results"]["4"]["intervals"]["macro_f1"]["low"] >= 0
+    summary = read_json(run / "reports" / "study-summary.json")
+    assert set(summary["results"]) == {"4", "6", "selected"}
+    assert summary["results"]["4"]["intervals"]["macro_f1"]["low"] >= 0
     assert (run / "reports" / "macro-f1.png").exists()
+    marker = read_json(run / "reports" / "complete.json")
+    chart_names = {name for result in ("4", "6", "selected")
+                   for name in confusion_chart_names(result)}
+    assert chart_names <= marker["files"].keys()
+    assert all((run / "reports" / name).stat().st_size > 0 for name in chart_names)
     shutil.rmtree(source)
     assert main(["report", "--run-id", run_id, "--runs-dir", str(runs),
                  "--logs-dir", str(logs), "--no-mlflow"]) == 0
+    assert read_json(run / "reports" / "complete.json") == marker
+
+    class RecordingTracking:
+        def __init__(self):
+            self.child_name = None
+            self.files = []
+
+        @contextmanager
+        def child(self, name, kind):
+            self.child_name = name
+            yield self
+            self.child_name = None
+
+        def file(self, path, artifact_path):
+            self.files.append((self.child_name, path.name, artifact_path))
+
+    class SilentLog:
+        def event(self, *args, **kwargs):
+            pass
+
+    tracking = RecordingTracking()
+    report(run, SilentLog(), tracking)
+    for result in ("4", "6", "selected"):
+        for name in confusion_chart_names(result):
+            assert (None, name, "reports") in tracking.files
+            assert (f"summary-{result}", name, "charts") in tracking.files

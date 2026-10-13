@@ -115,7 +115,13 @@ eligible raw sessions and sidecars under `snapshot/sha256/`, exclusion and
 cohort manifests, frozen session splits, feature tables, Optuna study
 histories, held-out predictions, and `reports/`. The report includes metric,
 per-class, participant, confusion-matrix, and prediction CSVs; a
-machine-readable summary; and `macro-f1.png`. When bootstrap is enabled, it
-also includes per-window sample CSVs and 95% intervals on the chart. MLflow
+machine-readable summary; and `macro-f1.png`. For each fixed window and the
+selected-window result, `reports/confusion-<result>-normalized.png` shows
+row-normalized percentages and `reports/confusion-<result>-counts.png` shows
+raw window counts. Each chart has one panel per seed, with the configured
+class names on both axes. The charts are also available in the MLflow parent
+run under `reports/` and in the matching result child run under `charts/`.
+When bootstrap is enabled, the report also includes per-window sample CSVs
+and 95% intervals on the macro-F1 chart. MLflow
 shows a parent experiment run and child tuning/result runs with metrics and
 artifacts. Optuna trials remain histories within study runs.

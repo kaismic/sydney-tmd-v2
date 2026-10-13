@@ -1,4 +1,4 @@
-"""Metrics, hierarchical intervals, CSV tables, and window comparison chart."""
+"""Metrics, hierarchical intervals, CSV tables, and result charts."""
 from __future__ import annotations
 
 import matplotlib
@@ -79,6 +79,44 @@ def chart(summary, windows, path, intervals_enabled):
     plt.close(fig)
 
 
+def confusion_chart(matrices, labels, result, path, normalized):
+    """Plot each seed separately because its held-out windows may recur in other seeds."""
+    names = [name for name, _ in sorted(labels.items(), key=lambda item: item[1])]
+    count = len(names)
+    width = max(4, count * 1.1 + 1.5)
+    fig, axes = plt.subplots(1, len(matrices), figsize=(width * len(matrices), width),
+                             squeeze=False)
+    try:
+        maximum = max(1, *(int(matrix.max()) for matrix in matrices.values()))
+        for ax, (seed, counts) in zip(axes.flat, sorted(matrices.items())):
+            if normalized:
+                totals = counts.sum(axis=1, keepdims=True)
+                values = np.divide(counts, totals, out=np.zeros_like(counts, dtype=float),
+                                   where=totals != 0)
+            else:
+                values = counts
+            ax.imshow(values, cmap="Blues", vmin=0, vmax=1 if normalized else maximum)
+            for actual in range(count):
+                for predicted in range(count):
+                    value = values[actual, predicted]
+                    label = f"{value:.1%}" if normalized else str(value)
+                    ax.text(predicted, actual, label, ha="center", va="center",
+                            color="white" if value > (0.5 if normalized else maximum / 2)
+                            else "black")
+            ax.set(xticks=range(count), yticks=range(count), xticklabels=names,
+                   yticklabels=names, xlabel="Predicted", ylabel="Actual", title=f"Seed {seed}")
+        title = "Selected window" if result == "selected" else f"{result}-second windows"
+        fig.suptitle(title + (" — row-normalized" if normalized else " — window counts"))
+        fig.tight_layout()
+        atomic_write(path, lambda p: fig.savefig(p, format="png", dpi=160))
+    finally:
+        plt.close(fig)
+
+
+def confusion_chart_names(result):
+    return [f"confusion-{result}-normalized.png", f"confusion-{result}-counts.png"]
+
+
 def report(run, log, tracking):
     identity, _ = verify_prepared(run)
     config = identity["configuration"]
@@ -90,12 +128,19 @@ def report(run, log, tracking):
             raise ValueError(f"Incomplete result bundle: {bundle}")
     directory = run / "reports"
     directory.mkdir(exist_ok=True)
+    results = [str(w) for w in config["windows_seconds"]] + ["selected"]
     if _bundle(directory):
         marker = read_json(directory / "complete.json")
         if marker["evaluation_sha256"] != file_hash(run / "evaluated.json"):
             raise ValueError("Report does not match evaluation")
         for name in marker["files"]:
             tracking.file(directory / name, "reports")
+        for result in results:
+            charts = confusion_chart_names(result)
+            if all(name in marker["files"] for name in charts):
+                with tracking.child(f"summary-{result}", "heldout_result"):
+                    for name in charts:
+                        tracking.file(directory / name, "charts")
         log.event("report cache hit", output=str(directory))
         return
     rows = pd.concat([pd.read_parquet(run / b / "predictions.parquet")
@@ -103,11 +148,11 @@ def report(run, log, tracking):
     atomic_write(directory / "predictions.csv", lambda p: rows.to_csv(p, index=False))
     labels = config["labels"]
     seeds = config["seeds"]
-    results = [str(w) for w in config["windows_seconds"]] + ["selected"]
-    summary, seed_rows, class_rows, participant_rows, matrices, samples_files = {}, [], [], [], [], []
+    summary, seed_rows, class_rows, participant_rows, matrices, samples_files, chart_files = (
+        {}, [], [], [], [], [], [])
     for result in results:
         group = rows[rows.result == result]
-        by_seed = {}
+        by_seed, result_matrices = {}, {}
         for seed in seeds:
             data = group[group.seed == seed]
             if data.empty or data.duplicated(["session_id", "window_start_ms"]).any():
@@ -117,6 +162,7 @@ def report(run, log, tracking):
             seed_rows.append({"result": result, "seed": seed, **by_seed[str(seed)]})
             class_rows.extend({"result": result, "seed": seed, **item} for item in metrics["per_class"])
             cm = confusion_matrix(data.label, data.prediction, labels=list(range(len(labels))))
+            result_matrices[seed] = cm
             matrices.extend({"result": result, "seed": seed, "actual": actual,
                              "predicted": predicted, "windows": int(cm[actual, predicted])}
                             for actual in range(len(labels)) for predicted in range(len(labels)))
@@ -136,9 +182,14 @@ def report(run, log, tracking):
                          .to_csv(p, index=False))
             samples_files.append(filename)
         summary[result] = {"seed_scores": by_seed, "mean": means, "intervals": intervals}
+        for normalized, filename in zip((True, False), confusion_chart_names(result)):
+            confusion_chart(result_matrices, labels, result, directory / filename, normalized)
+            chart_files.append(filename)
         with tracking.child(f"summary-{result}", "heldout_result"):
             tracking.params({"result": result, "selection_metric": config["selection_metric"]})
             tracking.metrics(means)
+            for filename in confusion_chart_names(result):
+                tracking.file(directory / filename, "charts")
         log.event("result metrics complete", result=result, **means)
     metric_rows = [{"result": result, **item["mean"],
                     "macro_f1_low": item["intervals"]["macro_f1"]["low"] if item["intervals"] else None,
@@ -156,7 +207,8 @@ def report(run, log, tracking):
                "cohort": read_json(run / "cohort.json"),
                "splits": read_json(run / "splits.json"),
                "bootstrap_note": "Intervals resample saved predictions, not model training or selection."})
-    files = ["predictions.csv", *tables, *samples_files, "macro-f1.png", "study-summary.json"]
+    files = ["predictions.csv", *tables, *samples_files, *chart_files,
+             "macro-f1.png", "study-summary.json"]
     write_json(directory / "complete.json", {"evaluation_sha256": file_hash(run / "evaluated.json"),
                  "files": {name: file_hash(directory / name) for name in files}})
     for name in files:

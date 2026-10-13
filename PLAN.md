@@ -16,6 +16,8 @@ studies and evaluated results; Optuna trials are recorded within study runs,
 not as individual MLflow runs. Log progress while the experiment runs. Save
 metric CSVs, predictions, trial histories, a machine-readable study summary,
 and a macro-F1-versus-window line chart locally and as MLflow artifacts.
+Each fixed window and the selected-window result also has count and
+row-normalized confusion-matrix PNGs with one panel per seed.
 
 ## Experiment JSON
 
@@ -153,8 +155,15 @@ evaluation. Report both selection metrics even when only one drives selection.
 Report macro F1, balanced accuracy, per-class precision/recall/F1/support,
 and confusion matrices for each fixed window and applicable selected-window
 result. Save supporting CSV tables, held-out predictions, trial histories,
-the study summary, and a macro-F1-versus-window line chart. If
-`bootstrap_iterations` is enabled, draw seeds with replacement, participants
+the study summary, and a macro-F1-versus-window line chart. Save
+`confusion-<result>-normalized.png` and `confusion-<result>-counts.png` in
+`reports/` for every fixed window and `selected`. The first displays
+row-normalized percentages and the second displays window counts, with one
+panel per seed and configured class names on the axes. Include the PNGs
+in the report completion manifest, upload them to the MLflow parent run's
+`reports/` artifacts and the corresponding result child run's `charts/`
+artifacts. If `bootstrap_iterations` is enabled, draw seeds with replacement,
+participants
 within sampled seeds, and sessions within sampled participants while retaining
 each sampled session's windows. Recompute pooled metrics and generate 95%
 percentile intervals for **every evaluated fixed window**, showing them on
