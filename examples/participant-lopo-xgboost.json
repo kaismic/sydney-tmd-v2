@@ -1,0 +1,34 @@
+{
+  "feature_names": [
+    "accelerometer#mean",
+    "accelerometer#standard_deviation",
+    "accelerometer#range",
+    "accelerometer#minimum",
+    "gyroscope#mean",
+    "gyroscope#standard_deviation",
+    "gyroscope#range",
+    "gyroscope#minimum",
+    "magnetometer#standard_deviation",
+    "magnetometer#range",
+    "magnetometer#minimum"
+  ],
+  "windows_seconds": [100, 120, 140],
+  "seeds": [42, 43, 44],
+  "individual_transport_training_ratios": {
+    "bus": 1.0,
+    "car": 1.0,
+    "train": 1.0
+  },
+  "labels": {
+    "bus": 0,
+    "car": 1,
+    "train": 2
+  },
+  "evaluation_strategy": "participant_lopo",
+  "selection_metric": "macro_f1",
+  "bootstrap_iterations": 5000,
+  "optuna_trials": 100,
+  "model_families": ["xgboost"],
+  "cv_fold_count": 3,
+  "minimum_window_count_per_participant": 10
+}

@@ -1,0 +1,29 @@
+{
+  "feature_names": [
+    "accelerometer#mean",
+    "accelerometer#standard_deviation",
+    "gyroscope#mean",
+    "gyroscope#standard_deviation",
+    "magnetometer#standard_deviation"
+  ],
+  "windows_seconds": [100, 120, 140],
+  "seeds": [42, 43, 44],
+  "individual_transport_training_ratios": {
+    "bus": 0.8,
+    "car": 1.0,
+    "train": 1.0
+  },
+  "labels": {
+    "bus": 0,
+    "car": 1,
+    "train": 2
+  },
+  "evaluation_strategy": "session_train_test_split",
+  "session_train_test_split_ratio": 0.8,
+  "selection_metric": "balanced_accuracy",
+  "bootstrap_iterations": 5000,
+  "optuna_trials": 100,
+  "model_families": ["xgboost", "random_forest"],
+  "cv_fold_count": 3,
+  "minimum_window_count_per_participant": 10
+}

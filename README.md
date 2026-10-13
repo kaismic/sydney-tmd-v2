@@ -31,6 +31,23 @@ paths, set `SYDNEY_TMD_RUNS_DIR`, `SYDNEY_TMD_MLFLOW_DIR`, and
 the tracked [`experiment.json`](experiment.json), which contains `{}` and
 therefore selects the baseline defaults.
 
+Two complete example configs are available:
+
+| File | Study |
+|---|---|
+| [`examples/participant-lopo-xgboost.json`](examples/participant-lopo-xgboost.json) | Explicit baseline: participant leave-one-out, XGBoost, macro F1. |
+| [`examples/session-split-model-comparison.json`](examples/session-split-model-comparison.json) | Session train/test split, both model families, balanced-accuracy selection, and 80% of bus training sessions. |
+
+To run one with Compose, set its absolute path before starting the study:
+
+```powershell
+$env:SYDNEY_TMD_CONFIG_FILE = (Resolve-Path .\examples\session-split-model-comparison.json).Path
+docker compose run --rm study
+```
+
+Both examples use 100 completed trials per tuning study and require enough
+Sydney sessions for their class and inner-fold coverage checks.
+
 The study service generates a UTC run name such as
 `20261013T043015Z-a1b2c3d4`. To resume an interrupted run, pass its ID with
 the same inputs and settings:
