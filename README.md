@@ -1,42 +1,104 @@
 # Sydney TMD V2
 
-**Status: planning.** This directory currently contains documentation only.
-The V2 experiment script, Docker image, and Compose services have not been
-implemented, so there are no runnable V2 setup or experiment commands yet.
-The full intended behavior is in [PLAN.md](PLAN.md).
+Sydney-only transport-mode experiments driven by one JSON file. The pipeline
+prepares a frozen input snapshot, compares configurable window lengths using
+nested validation, and saves held-out metrics and charts to local run storage
+and MLflow. It implements [PLAN.md](PLAN.md), building on the sensor processing
+of `../sydney-tmd-v1`.
 
-Sydney TMD V2 will train and compare transport-mode classifiers using only
-Sydney sessions with an explicit Australian country code. It builds on the
-sensor processing and study structure of `../sydney-tmd-v1` while adding a
-JSON-driven experiment, Docker execution, random forest alongside XGBoost,
-and live MLflow tracking.
+The CLI, Docker image, and Compose services are implemented. The synthetic
+end-to-end test passes. A full production experiment and container launch have
+not yet been run in this repository.
 
-## Intended inputs
+## Docker workflow
 
-- A locally downloaded directory of Sydney session JSON or `.json.gz` files
-  and any metadata sidecars. Downloading and synchronization happen separately.
-- One experiment JSON file. Defaults reproduce the V1 study windows
-  (100/120/140 seconds), seeds (42/43/44), participant leave-one-out
-  evaluation, XGBoost, macro F1 selection, 100 trials, three inner folds,
-  5,000 bootstrap draws, and a minimum of 10 valid windows per participant
-  at each window size.
-- Optional JSON settings select registered features, transport labels,
-  training-session fractions, window lengths, seeds, the evaluation strategy,
-  the selection metric, and `xgboost` and/or `random_forest`. The manual
-  participant and session train/test strategies are specified in the plan.
+Docker Compose mounts the downloaded Sydney sessions read-only. Download or
+sync them separately, then set `SYDNEY_TMD_INPUT_DIR` to their directory.
+From this project directory in PowerShell:
 
-## Planned workflow and outputs
+```powershell
+$env:SYDNEY_TMD_INPUT_DIR = 'D:\path\to\sydney-sessions'
+docker compose up -d --build mlflow
+docker compose run --rm study
+```
 
-The future Compose project will start a persistent MLflow server and run a
-one-shot experiment service with the input directory mounted read-only. The
-service will validate the JSON, copy eligible sessions and sidecars into a
-hashed per-run snapshot, extract quality-valid windows, tune models, evaluate
-held-out data, and stream parent and child run progress to MLflow.
+Open <http://127.0.0.1:5000> for the MLflow UI. The default experiment name
+is `Sydney TMD V2`. Set `SYDNEY_TMD_MLFLOW_PORT` if port 5000 is occupied.
+The local `runs/` and `mlflow-data/` directories retain outputs across
+container restarts. `runs/logs/` contains flushed stage logs. To use other
+paths, set `SYDNEY_TMD_RUNS_DIR`, `SYDNEY_TMD_MLFLOW_DIR`, and
+`SYDNEY_TMD_CONFIG_FILE` before invoking Compose. The config file defaults to
+the tracked [`experiment.json`](experiment.json), which contains `{}` and
+therefore selects the baseline defaults.
 
-Each run will retain the resolved configuration, snapshot manifest, split
-decisions, metric CSVs, predictions, trial histories, a machine-readable
-summary, and a macro-F1-versus-window line chart. Enabled bootstrap reporting
-will add 95% confidence intervals to each evaluated fixed-window result.
-The MLflow parent name will contain a UTC start timestamp and six random
-lowercase hex characters. Exact Docker and experiment commands will be added
-when their interfaces exist.
+The study service generates a UTC run name such as
+`20261013T043015Z-a1b2c3d4`. To resume an interrupted run, pass its ID with
+the same inputs and settings:
+
+```powershell
+docker compose run --rm study all --input /input --config /config/experiment.json --runs-dir /runs --logs-dir /runs/logs --tracking-uri http://mlflow:5000 --run-id YOUR_RUN_ID
+```
+
+You can also invoke `prepare`, `evaluate`, or `report` separately through the
+same entry point. Later stages read the frozen configuration and snapshot from
+the run directory. A changed configuration, code version, dependency version,
+or original input inventory requires a new run ID when preparing; later stages
+can run from the snapshot after the original input directory is removed.
+
+## Experiment settings
+
+The baseline uses 100/120/140-second windows, seeds 42/43/44, participant
+leave-one-out evaluation, XGBoost, macro F1 selection, 100 completed Optuna
+trials per study, three inner folds, 5,000 bootstrap draws, and at least 10
+valid windows per participant at **each** size. The full JSON schema and
+search spaces are in [PLAN.md](PLAN.md).
+
+For a smaller custom experiment, copy `experiment.json` and set fields such
+as these:
+
+```json
+{
+  "windows_seconds": [100, 120],
+  "seeds": [42],
+  "model_families": ["xgboost", "random_forest"],
+  "selection_metric": "balanced_accuracy",
+  "optuna_trials": 20,
+  "bootstrap_iterations": null,
+  "evaluation_strategy": "session_train_test_split",
+  "session_train_test_split_ratio": 0.8
+}
+```
+
+The other supported strategies are `participant_lopo` and
+`manual_participant_group`. The latter requires a
+`manual_participant_group` object with disjoint `train` and `test` participant
+ID lists. Splits and transport training fractions keep whole sessions
+together. Custom `labels` map selected Sydney `vehicle_type` values to
+contiguous integer codes starting at zero. `feature_names` selects registered
+sensor features; new feature computations require code.
+
+## Local development and outputs
+
+Python 3.12+ is required. Install the package and run tests from this
+directory:
+
+```powershell
+python -m venv .venv
+.venv/Scripts/python -m pip install -e . pytest
+.venv/Scripts/python -m pytest -q
+```
+
+On Linux or macOS, use `.venv/bin/python`. To run without Docker, start a
+reachable MLflow server, then use
+`python -m sydney_tmd_v2 all --input <sessions> --config <json> --tracking-uri <server-url>`.
+The `--no-mlflow` option is for local tests only.
+
+Each `runs/<run-id>/` contains the resolved experiment, source fingerprints,
+eligible raw sessions and sidecars under `snapshot/sha256/`, exclusion and
+cohort manifests, frozen session splits, feature tables, Optuna study
+histories, held-out predictions, and `reports/`. The report includes metric,
+per-class, participant, confusion-matrix, and prediction CSVs; a
+machine-readable summary; and `macro-f1.png`. When bootstrap is enabled, it
+also includes per-window sample CSVs and 95% intervals on the chart. MLflow
+shows a parent experiment run and child tuning/result runs with metrics and
+artifacts. Optuna trials remain histories within study runs.

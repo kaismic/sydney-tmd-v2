@@ -5,9 +5,9 @@
 Build a Sydney-only transport-mode study from the structure and sensor semantics
 of `../sydney-tmd-v1`. V2 will run JSON-defined experiments in Docker Compose,
 compare configurable windows and model families, and show live progress and
-results in a Docker-hosted MLflow server. This document specifies the intended
-implementation; the V2 pipeline and Compose services do not exist yet. See
-[README.md](README.md) for the proposed operator workflow.
+results in a Docker-hosted MLflow server. The initial pipeline and Compose
+services are implemented; a production run and container launch are still
+pending. See [README.md](README.md) for operator commands and current status.
 
 Each execution receives an immutable run identity. The MLflow parent run name
 uses the UTC execution start time and eight randomly generated lowercase hex
@@ -167,5 +167,5 @@ snapshot, reports, and MLflow store in persistent writable volumes. The
 experiment entry point accepts a JSON path, validates and freezes its resolved
 settings, prepares the snapshot, evaluates the strategies, writes local
 outputs, and streams progress to the MLflow parent and child runs. Publish
-the output artifacts to MLflow as stages finish. The README will gain exact
-commands once the services and CLI exist.
+the output artifacts to MLflow as stages finish. The CLI and Compose commands
+are documented in the README.

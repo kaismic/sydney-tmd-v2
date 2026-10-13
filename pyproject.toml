@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sydney-tmd-v2"
+version = "0.1.0"
+description = "Sydney-only configurable transport-mode experiments with MLflow"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=2", "pandas>=2.2", "scikit-learn>=1.6", "xgboost>=3",
+  "optuna>=4", "matplotlib>=3.9", "pyarrow>=18", "mlflow>=3.15,<4"
+]
+
+[project.scripts]
+sydney-tmd-v2 = "sydney_tmd_v2.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sydney_tmd_v2*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
