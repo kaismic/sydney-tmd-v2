@@ -19,8 +19,14 @@ From this project directory in PowerShell:
 ```powershell
 $env:SYDNEY_TMD_INPUT_DIR = 'D:\path\to\sydney-sessions'
 docker compose up -d --build mlflow
+docker compose build study
 docker compose run --rm study
 ```
+
+Rebuild `study` after changing the project code; `up --build mlflow` rebuilds
+only the MLflow service. A completed run made with an older study image keeps
+its original reports and artifacts, so use a new run ID to generate the new
+confusion-matrix PNGs.
 
 Open <http://127.0.0.1:5000> for the MLflow UI. The default experiment name
 is `Sydney TMD V2`. Set `SYDNEY_TMD_MLFLOW_PORT` if port 5000 is occupied.
