@@ -37,22 +37,34 @@ paths, set `SYDNEY_TMD_RUNS_DIR`, `SYDNEY_TMD_MLFLOW_DIR`, and
 the tracked [`experiment.json`](experiment.json), which contains `{}` and
 therefore selects the baseline defaults.
 
-Two complete example configs are available:
+Five complete example configs are available:
 
 | File | Study |
 |---|---|
 | [`examples/participant-lopo-xgboost.json`](examples/participant-lopo-xgboost.json) | Explicit baseline: participant leave-one-out, XGBoost, macro F1. |
 | [`examples/session-split-model-comparison.json`](examples/session-split-model-comparison.json) | Session train/test split, both model families, balanced-accuracy selection, and 80% of bus training sessions. |
+| [`examples/quick-session-split/experiment.json`](examples/quick-session-split/experiment.json) | Smaller session-split run: random forest, two window sizes, one seed, five trials, two inner folds, and no bootstrap intervals. |
+| [`examples/participant-lopo-random-forest/experiment.json`](examples/participant-lopo-random-forest/experiment.json) | Baseline participant leave-one-out settings with random forest in place of XGBoost. |
+| [`examples/manual-participant-group/experiment.json`](examples/manual-participant-group/experiment.json) | Fixed participant train/test groups, both model families, and balanced-accuracy selection; replace the example participant IDs before running. |
 
 To run one with Compose, set its absolute path before starting the study:
 
 ```powershell
-$env:SYDNEY_TMD_CONFIG_FILE = (Resolve-Path .\examples\session-split-model-comparison.json).Path
+$env:SYDNEY_TMD_CONFIG_FILE = (Resolve-Path .\examples\quick-session-split\experiment.json).Path
 docker compose run --rm study
 ```
 
-Both examples use 100 completed trials per tuning study and require enough
-Sydney sessions for their class and inner-fold coverage checks.
+All examples except `quick-session-split` use 100 completed trials per tuning
+study; the smaller example uses five. Each requires enough Sydney sessions for
+its class and inner-fold coverage checks. The quick example reduces tuning work
+but keeps the requirement for at least 10 valid windows per participant at each
+configured size.
+
+The manual-group example uses placeholder participant IDs. Replace both lists
+with IDs from your input data, keeping the train and test lists disjoint. With
+three inner folds, supply at least three eligible training participants and
+enough class coverage for every inner training partition. Unlisted participants
+do not enter that evaluation.
 
 The study service generates a UTC run name such as
 `20261013T043015Z-a1b2c3d4`. To resume an interrupted run, pass its ID with
